@@ -10,7 +10,15 @@ import akka.http.scaladsl.model.{HttpEntity, HttpResponse}
 import akka.http.scaladsl.server.Directives
 import akka.http.scaladsl.server.Directives._
 import akka.stream.ActorMaterializer
+import scala.util.{ Failure, Success }
 import spray.json._
+import akka.stream._
+import akka.stream.scaladsl._
+import akka.{ NotUsed, Done }
+import akka.util.ByteString
+import scala.concurrent._
+import scala.concurrent.duration._
+import java.nio.file.Paths
 
 trait JsonSupport extends SprayJsonSupport with DefaultJsonProtocol {
   implicit val expressionStringFormat = jsonFormat1(StringExpression)
@@ -22,9 +30,29 @@ final case class StringExpressionResult(result: Expression.Result)
 final case class StringExpressionError(reason: Expression.Error)
 
 object ParallelCalculatorServer extends Directives with JsonSupport {
-  def main(args: Array[String]) = {
 
-    implicit val system = ActorSystem("my-system")
+  def main(args: Array[String]): Unit = { // TODO delete
+    implicit val system = ActorSystem("my-app")
+    implicit val materializer = ActorMaterializer()
+    // needed for the future flatMap/onComplete in the end
+    implicit val executionContext = system.dispatcher
+    val result = ParallelCalculator.evaluate("123")
+     result.onComplete {
+      case Success(resultOrError) => resultOrError match {
+        case Right(res) => println(res)
+        case Left(err) => println(err)
+      }
+      case Failure(ex) => println("surprising fail!")
+     }
+    result.onComplete { _ => 
+      Thread.sleep(1000)
+      system.terminate()
+    }
+  }
+
+  def main2(args: Array[String]): Unit = {
+
+    implicit val system = ActorSystem("my-app")
     implicit val materializer = ActorMaterializer()
     // needed for the future flatMap/onComplete in the end
     implicit val executionContext = system.dispatcher
@@ -33,9 +61,12 @@ object ParallelCalculatorServer extends Directives with JsonSupport {
       path("evaluate") {
         post {
           entity(as[StringExpression]) { stringExpression =>
-            ParallelCalculator.evaluate(stringExpression.expression) match {
-              case Right(res) => complete(StringExpressionResult(res))
-              case Left(err) => complete(StatusCodes.UnprocessableEntity -> err.reason)
+            onComplete(ParallelCalculator.evaluate(stringExpression.expression)) {
+              case Success(either) => either match {
+                case Right(res) => complete(StringExpressionResult(res))
+                case Left(err) => complete(StatusCodes.UnprocessableEntity -> err.reason)
+              }
+              case Failure(ex) => complete(StatusCodes.InternalServerError -> "Error during stream processing!")
             }
           }
         }
@@ -53,13 +84,35 @@ object ParallelCalculatorServer extends Directives with JsonSupport {
 }
 
 object ParallelCalculator {
-  def evaluate(stringExpression: String): Either[Expression.Error, Expression.Result] = {
-    // stringToExpression(stringExpression).map(_.evaluate)
-    Right(11)
+  def evaluate(stringExpression: String)(implicit mat: ActorMaterializer, ec: ExecutionContext): Future[Either[Expression.Error, Expression.Result]] = {
+    stringToExpression(stringExpression) match {
+      case Left(err) => Future(Left(err))
+      case Right(expression) => {
+        val sink = Sink.head[Int]
+        val g = RunnableGraph.fromGraph(GraphDSL.create(sink) { implicit builder => out =>
+
+          import GraphDSL.Implicits._
+          val in = Source(1 to 5)
+          // val out: Sink[Int, Future[Int]] = Sink.head
+
+          val bcast = builder.add(Broadcast[Int](2))
+          val merge = builder.add(Merge[Int](2))
+
+          val f1, f2, f3, f4 = Flow[Int].map(_ + 10)
+
+          in ~> f1 ~> bcast ~> f2 ~> merge ~> f3 ~> out
+          bcast ~> f4 ~> merge
+          ClosedShape
+        })
+        g.run().map(Right(_))
+      }
+    }
+
   }
 
   def stringToExpression(s: String): Either[Expression.Error, Expression] = {
-    ???
+    // TODO
+    Right(Num(2))
   }
 
 }
