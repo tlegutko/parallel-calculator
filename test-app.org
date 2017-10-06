@@ -36,7 +36,7 @@
 * TODO technical test in person possible questions:
 ** what if we were to add exponents or roots or other operations?
 * TODO better tests [0/3]
-** TODO generate huge test case to somehow test how parallellism is performing
-** TODO some http tests (include various errors!)
-** TODO string to expr
+  * [ ] generate huge test case to somehow test how parallellism is performing
+  * [ ] some http tests (include various errors!)
+  * [ ] string to expr
    

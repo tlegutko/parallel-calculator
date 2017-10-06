@@ -1,6 +1,7 @@
 package testapp
 
 import akka.http.scaladsl.model.StatusCodes
+import scala.collection.concurrent.TrieMap
 import scala.io.StdIn
 
 import akka.actor.ActorSystem
@@ -37,17 +38,13 @@ object ParallelCalculatorServer extends Directives with JsonSupport {
     // needed for the future flatMap/onComplete in the end
     implicit val executionContext = system.dispatcher
     val result = ParallelCalculator.evaluate("123")
-     result.onComplete {
-      case Success(resultOrError) => resultOrError match {
-        case Right(res) => println(res)
-        case Left(err) => println(err)
+    result match {
+      case Left(err) => println(err)
+      case Right(futureRes) => futureRes.onComplete {
+        case Success(res) => println(res); system.terminate()
+        case Failure(ex) => println(ex); system.terminate()
       }
-      case Failure(ex) => println("surprising fail!")
      }
-    result.onComplete { _ => 
-      Thread.sleep(1000)
-      system.terminate()
-    }
   }
 
   def main2(args: Array[String]): Unit = {
@@ -61,12 +58,12 @@ object ParallelCalculatorServer extends Directives with JsonSupport {
       path("evaluate") {
         post {
           entity(as[StringExpression]) { stringExpression =>
-            onComplete(ParallelCalculator.evaluate(stringExpression.expression)) {
-              case Success(either) => either match {
-                case Right(res) => complete(StringExpressionResult(res))
-                case Left(err) => complete(StatusCodes.UnprocessableEntity -> err.reason)
+            ParallelCalculator.evaluate(stringExpression.expression) match {
+              case Left(err) => complete(StatusCodes.UnprocessableEntity -> err.reason)
+              case Right(futureRes) => onComplete(futureRes) {
+                case Success(res) => complete(StringExpressionResult(res))
+                case Failure(ex) => println(ex); complete(StatusCodes.InternalServerError -> Expression.StreamProcessingError.reason)
               }
-              case Failure(ex) => complete(StatusCodes.InternalServerError -> "Error during stream processing!")
             }
           }
         }
@@ -83,47 +80,77 @@ object ParallelCalculatorServer extends Directives with JsonSupport {
 
 }
 
-object ParallelCalculator {
-  def evaluate(stringExpression: String)(implicit mat: ActorMaterializer, ec: ExecutionContext): Future[Either[Expression.Error, Expression.Result]] = {
-    stringToExpression(stringExpression) match {
-      case Left(err) => Future(Left(err))
-      case Right(expression) => {
-        val sink = Sink.head[Int]
-        val g = RunnableGraph.fromGraph(GraphDSL.create(sink) { implicit builder => out =>
 
-          import GraphDSL.Implicits._
-          val in = Source(1 to 5)
+object ParallelCalculator {
+  def evaluate(s: String)(implicit mat: ActorMaterializer): Either[Expression.Error, Future[Expression.Result]] =
+    stringToExpression(s).map(createCalculationGraph(_).run())
+  
+  def createCalculationGraph(calculation: Calculation): RunnableGraph[Future[Expression.Result]] = {
+        val sink = Sink.head[Expression.Result]
+        RunnableGraph.fromGraph(GraphDSL.create(sink) { implicit builder => out =>
+          // import GraphDSL.Implicits._
+          // val in = Source(1 to 5).map(_.toDouble)
           // val out: Sink[Int, Future[Int]] = Sink.head
 
-          val bcast = builder.add(Broadcast[Int](2))
-          val merge = builder.add(Merge[Int](2))
+          // val bcast = builder.add(Broadcast[Expression.Result](2))
+          // val merge = builder.add(Merge[Expression.Result](2))
 
-          val f1, f2, f3, f4 = Flow[Int].map(_ + 10)
+          // val f1, f2, f3, f4 = Flow[Expression.Result].map(_ + 10)
+          // in ~> f1 ~> bcast ~> f2 ~> merge ~> f3 ~> out
+          // bcast ~> f4 ~> merge
+          //                         // val in = Source.single(calculation)
+                                  // val evalFlow = Flow[Expression].map(_.evaluate)
+                                  // val parallelBalancer = balancer()
 
-          in ~> f1 ~> bcast ~> f2 ~> merge ~> f3 ~> out
-          bcast ~> f4 ~> merge
           ClosedShape
         })
-        g.run().map(Right(_))
-      }
-    }
 
   }
 
-  def stringToExpression(s: String): Either[Expression.Error, Expression] = {
+  def balancer[In, Out](worker: Flow[In, Out, Any], workerCount: Int): Flow[In, Out, NotUsed] = {
+  import GraphDSL.Implicits._
+
+  Flow.fromGraph(GraphDSL.create() { implicit b =>
+    val balancer = b.add(Balance[In](workerCount, waitForAllDownstreams = true))
+    val merge = b.add(Merge[Out](workerCount))
+
+    for (_ <- 1 to workerCount) {
+      // for each worker, add an edge from the balancer to the worker, then wire
+      // it to the merge element
+      balancer ~> worker.async ~> merge
+    }
+
+    FlowShape(balancer.in, merge.out)
+  })
+  }
+
+  def stringToExpression(s: String): Either[Expression.Error, Calculation] = {
     // TODO
-    Right(Num(2))
+    Right(Calculation(TrieMap(0 -> List(Sum(Num(2), Num(2)))), 0))
   }
 
 }
+
+case class Calculation(expressionMap: TrieMap[Expression.Level, List[Expression]], topLevel: Expression.Level)
 
 object Expression {
   type Result = Double
-  case class Error(reason: String)
+  type Level = Int
+  sealed abstract class Error(val reason: String)
+  case object StreamProcessingError extends Error("Error during stream processing")
 }
+
+
 sealed trait Expression {
   def evaluate: Expression.Result
+  // def leftP: Option[Expression] //  is left expression in parent
+  // def rightP: Option[Expression] // is right expression in parent
 }
+
+case class ExpressionLevel(e: Expression, level: Int) extends Expression {
+  def evaluate = e.evaluate
+}
+
 case class Sum(l: Expression, r: Expression) extends Expression {
   def evaluate = l.evaluate + r.evaluate
 }
