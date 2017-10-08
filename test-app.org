@@ -10,7 +10,8 @@
   * [ ] figure out nicely formated error response (string => json with reason)
 * DecimalFormat
  new DecimalFormat("#.##").format(1.199) to get rid of trailing 0 in double
-* TODO Expression representation to faciliate parallel computation - biggest question
+* DONE Expression representation to faciliate parallel computation - biggest question
+  Finally I've decided for simpler approach with representing expression tree as stream graph.
   1. There are evidently sequential, non-parallelizable parts of computation. (3+2)*4 needs 2 computational stages
   2. There are many strategies for parallelism utilization for this problem
   3. Changing division and subtraction to multiplication allows to reduce number of stages and associativeness
@@ -26,15 +27,26 @@
    FanInLooper ~> Source
    EWPF - Eval Worker Pool Fixed - async worker pool for multiplication and adding, see https://doc.akka.io/docs/akka/2.5.3/scala/stream/stream-cookbook.html#cookbook-balance
 ** TODO how do I represent calculation being passed through stream graph to show nesting levels?
-* TODO String to Expression parsing
-** TODO error cases
-   * [ ] division by 0
-   * [ ] improperly formatted, eg. "1/", "(1+3"
-   * [ ] spaces besides operators
-** associativity of operators
-** parentheses handling
+* DONE Stream streams streams
+** simple idea
+   map each of Expression tree's leaves to a stream source and have a stream sink at the tree's root. conceptually it's way easier than previous algorithm, should work, but what about para
+** execution model
+   "To run a stage asynchronously it has to be marked explicitly as such using the .async method. _Being run asynchronously means that a stage, after handing out an element to its downstream consumer is able to immediately process the next message._" - That line from docs.. that's not what I want, in my case each flow processes two elements only via Zip[A,B].
+   "The default behavior of Akka Streams is to put all computations of a graph (where possible) in the same single-threaded “island” (I carefully avoid to say thread here, as the reality is more complicated, but bear with me) *unless instructed otherwise.*"
+   https://akka.io/blog/2016/07/06/threading-and-concurrency-in-akka-streams-explained
+   But that's perfectly what I hoped it would be! Stages run on different threads from a thread pool, that's perfect.
+* TODO String to Expression parsing [2/3]
+  Combinator parsers to the rescue, nice!
+  * [ ] error cases [0/3]
+    I should be able to find those out during parsing
+    * [ ] division by 0
+    * [ ] improperly formatted, eg. "1/", "(1+3"
+    * [ ] spaces besides operators
+  * [X] associativity of operators
+  * [X] parentheses handling
 * TODO technical test in person possible questions:
-** what if we were to add exponents or roots or other operations?
+  * what if we were to add exponents or roots or other operations?
+    just next level in parser grammar grammar as well as next Expression
 * TODO better tests [0/3]
   * [ ] generate huge test case to somehow test how parallellism is performing
   * [ ] some http tests (include various errors!)
