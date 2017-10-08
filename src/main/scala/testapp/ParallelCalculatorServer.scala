@@ -1,5 +1,6 @@
 package testapp
 
+import java.text.DecimalFormat
 import scala.concurrent._
 import scala.io.StdIn
 import scala.util.{Failure, Success}
@@ -13,32 +14,25 @@ import akka.stream._
 import spray.json._
 
 trait JsonSupport extends SprayJsonSupport with DefaultJsonProtocol {
-  implicit val expressionStringFormat = jsonFormat1(StringExpression)
-  implicit val expressionResultStringFormat = jsonFormat1(StringExpressionResult)
+  implicit val jsonInput = jsonFormat1(JsonExpressionInput)
+  implicit object jsonOutput extends RootJsonFormat[JsonExpressionResult] {
+    // custom serialization so instead of {"result": 11.0} there is {"result": 11}
+    // that is no trailing zero, so it's exactly as specified in example
+    def write(res: JsonExpressionResult) = 
+      JsObject("result" -> JsNumber(new DecimalFormat("#.###").format(res.result)))
+
+    def read(value: JsValue) = value match {
+      case _ => deserializationError("Reading of result not expected")
+    }
+  }
 }
 
-final case class StringExpression(expression: String)
-final case class StringExpressionResult(result: Expression.Result)
-final case class StringExpressionError(reason: Expression.Error)
+final case class JsonExpressionInput(expression: String)
+final case class JsonExpressionResult(result: Double)
 
 object ParallelCalculatorServer extends Directives with JsonSupport {
 
-  def main(args: Array[String]): Unit = { // TODO delete
-    implicit val system = ActorSystem("my-app")
-    implicit val materializer = ActorMaterializer.create(system)
-    implicit val executionContext = system.dispatcher
-
-    val result = ParallelCalculator.evaluate("(1-1)*2+3*(1-3+4)+10/2")
-    result match {
-      case Left(err) => println(err); system.terminate()
-      case Right(futureRes) => futureRes.onComplete {
-        case Success(res) => println(res); system.terminate()
-        case Failure(ex) => println(ex); system.terminate()
-      }
-     }
-  }
-
-  def main2(args: Array[String]): Unit = {
+  def main(args: Array[String]): Unit = {
     implicit val system = ActorSystem("test-app")
     implicit val materializer = ActorMaterializer.create(system)
     implicit val executionContext = system.dispatcher
@@ -46,12 +40,17 @@ object ParallelCalculatorServer extends Directives with JsonSupport {
     val route =
       path("evaluate") {
         post {
-          entity(as[StringExpression]) { stringExpression =>
+          entity(as[JsonExpressionInput]) { stringExpression =>
             ParallelCalculator.evaluate(stringExpression.expression) match {
               case Left(err) => complete(StatusCodes.UnprocessableEntity -> err.reason)
               case Right(futureRes) => onComplete(futureRes) {
-                case Success(res) => complete(StringExpressionResult(res))
-                case Failure(ex) => println(ex); complete(StatusCodes.InternalServerError -> Expression.StreamProcessingError().reason)
+                case Success(res) =>
+                  if (res.isInfinite)
+                    complete(StatusCodes.UnprocessableEntity -> Expression.DivisionByZeroError().reason)
+                  else
+                  complete(JsonExpressionResult(res))
+                case Failure(ex) => complete(
+                  StatusCodes.InternalServerError -> Expression.StreamProcessingError().reason)
               }
             }
           }
@@ -66,5 +65,4 @@ object ParallelCalculatorServer extends Directives with JsonSupport {
       .flatMap(_.unbind()) // trigger unbinding from the port
       .onComplete(_ => system.terminate()) // and shutdown when done
   }
-
 }

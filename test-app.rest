@@ -1,0 +1,44 @@
+:calculator = http://127.0.0.1:5555/evaluate
+:json = Content-Type: application/json
+# example from task instruction, no trailing 0
+POST :calculator
+:json
+{
+  "expression": "(1-1)*2+3*(1-3+4)+10/2"
+}
+# doubles are supported nicely
+POST :calculator
+:json
+{
+  "expression": "4.4/3"
+}
+# division by 0
+POST :calculator
+:json
+{
+  "expression": "(1-1)*2+3*(1-3+4)+2/(5-5)"
+}
+# incorrect formatting 1
+POST :calculator
+:json
+{
+  "expression": "(1-1)*+3*(1-3+4)+2/(5-5)"
+}
+# incorrect formatting 2
+POST :calculator
+:json
+{
+  "expression": "(1-1)*2+3*(1-3+4)+2/(5-5)-"
+}
+# unbalanced parentheses
+POST :calculator
+:json
+{
+  "expression": "(1-1*2+3*(1-3+4)+2/(5-5)"
+}
+# empty
+POST :calculator
+:json
+{
+  "expression": ""
+}

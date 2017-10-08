@@ -42,6 +42,7 @@ object Expression {
   type Level = Int
   sealed trait Error{ def reason: String }
   case class StreamProcessingError(reason: String = "Error during stream processing") extends Error
+  case class DivisionByZeroError(reason: String = "Unable to process expression containing division by 0") extends Error
   case class ParsingError(reason: String) extends Error
 }
 

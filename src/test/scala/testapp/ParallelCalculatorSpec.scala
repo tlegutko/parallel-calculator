@@ -8,7 +8,7 @@ class ParallelCalculatorSpec extends FlatSpec with Matchers {
   // }
 
   "The correct expression" should "evaluate correctly" in {
-    Sum(Num(2), Sum(Mul(Num(2), Num(2)), Mul(Num(2), Num(2)))).evaluate should be (10)
+    Sum(Num(2), Sum(Mul(Num(2), Num(2)), Mul(Num(2), Num(2)))).evaluateInSingleThread should be (10)
   }
 
 }
