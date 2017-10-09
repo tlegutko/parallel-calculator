@@ -35,9 +35,9 @@ object ParallelCalculatorStreams {
       Source.fromGraph(GraphDSL.create() { implicit b =>
         import GraphDSL.Implicits._
         val zipOp = b.add(ZipWith[ExprRes, ExprRes, ExprRes](op))
-        s0.async ~> zipOp.in0
-        s1.async ~> zipOp.in1
+        s0 ~> zipOp.in0
+        s1 ~> zipOp.in1
         SourceShape(zipOp.out)
-      })
+      }.async)
   }
 }

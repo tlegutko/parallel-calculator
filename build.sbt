@@ -3,8 +3,10 @@ lazy val root = (project in file(".")).
     inThisBuild(List(
       scalaVersion := "2.12.3",
       version      := "0.1.0"
-    )),
+                )),
     name := "test-app",
+    fork := true,
+    javaOptions in test += "-Xmx8G -XX:+UseConcMarkSweepGC",
     libraryDependencies ++= Seq(
       "org.scalatest" %% "scalatest" % "3.0.1" % "test",
       "com.typesafe.akka" %% "akka-http" % "10.0.10",

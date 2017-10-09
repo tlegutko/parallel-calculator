@@ -1,5 +1,6 @@
 package testapp
 
+import akka.http.scaladsl.Http.ServerBinding
 import java.text.DecimalFormat
 import scala.concurrent._
 import scala.io.StdIn
@@ -21,7 +22,8 @@ trait JsonSupport extends SprayJsonSupport with DefaultJsonProtocol {
     def write(res: JsonExpressionResult) = 
       JsObject("result" -> JsNumber(new DecimalFormat("#.###").format(res.result)))
 
-    def read(value: JsValue) = value match {
+    def read(value: JsValue) = value.asJsObject.getFields("result") match {
+      case Seq(JsNumber(res)) => JsonExpressionResult(res.toDouble)
       case _ => deserializationError("Reading of result not expected")
     }
   }
@@ -30,6 +32,36 @@ trait JsonSupport extends SprayJsonSupport with DefaultJsonProtocol {
 final case class JsonExpressionInput(expression: String)
 final case class JsonExpressionResult(result: Double)
 
+trait ParallelCalculatorRestService extends Directives with JsonSupport {
+  implicit val system: ActorSystem
+  implicit val materializer: ActorMaterializer
+  val route =
+    path("evaluate") {
+      post {
+        entity(as[JsonExpressionInput]) { stringExpression =>
+          ParallelCalculator.evaluate(stringExpression.expression) match {
+            case Left(err) => complete(StatusCodes.UnprocessableEntity -> err.reason)
+            case Right(futureRes) => onComplete(futureRes) {
+              case Success(res) =>
+                if (res.isInfinite)
+                  complete(StatusCodes.UnprocessableEntity -> Expression.DivisionByZeroError().reason)
+                else
+                complete(JsonExpressionResult(res))
+              case Failure(ex) => complete(
+                StatusCodes.InternalServerError -> Expression.StreamProcessingError().reason)
+            }
+          }
+        }
+      }
+    }
+}
+
+class ParallelCalculatorRestServer(implicit val system: ActorSystem, val materializer: ActorMaterializer) extends ParallelCalculatorRestService {
+  def startServer(addr: String, port: Int): Future[ServerBinding] = {
+    Http().bindAndHandle(route, addr, port) 
+  }
+}
+
 object ParallelCalculatorServer extends Directives with JsonSupport {
 
   def main(args: Array[String]): Unit = {
@@ -37,28 +69,7 @@ object ParallelCalculatorServer extends Directives with JsonSupport {
     implicit val materializer = ActorMaterializer.create(system)
     implicit val executionContext = system.dispatcher
 
-    val route =
-      path("evaluate") {
-        post {
-          entity(as[JsonExpressionInput]) { stringExpression =>
-            ParallelCalculator.evaluate(stringExpression.expression) match {
-              case Left(err) => complete(StatusCodes.UnprocessableEntity -> err.reason)
-              case Right(futureRes) => onComplete(futureRes) {
-                case Success(res) =>
-                  if (res.isInfinite)
-                    complete(StatusCodes.UnprocessableEntity -> Expression.DivisionByZeroError().reason)
-                  else
-                  complete(JsonExpressionResult(res))
-                case Failure(ex) => complete(
-                  StatusCodes.InternalServerError -> Expression.StreamProcessingError().reason)
-              }
-            }
-          }
-        }
-      }
-
-    val bindingFuture = Http().bindAndHandle(route, "localhost", 5555)
-
+    val bindingFuture = new ParallelCalculatorRestServer().startServer("localhost", 5555)
     println(s"Server online at http://localhost:5555/\nPress RETURN to stop...")
     StdIn.readLine() // let it run until user presses return
     bindingFuture
